@@ -5,13 +5,16 @@ import json
 
 st.title("Chat with Ollama")
 
+# Ollama host configuration
+ollama_host = st.text_input("Ollama Host", value="http://localhost:11434", key="ollama_host")
+
 # Initialize session state for message history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 # Fetch available models from Ollama
 try:
-    models_response = requests.get("http://localhost:11434/api/tags")
+    models_response = requests.get(f"{ollama_host}/api/tags")
     if models_response.status_code == 200:
         available_models = [model["name"] for model in models_response.json()["models"]]
     else:
@@ -41,7 +44,7 @@ if prompt := st.chat_input("What would you like to ask?"):
     # Prepare the API request
     try:
         response = requests.post(
-            "http://localhost:11434/api/generate",
+            f"{ollama_host}/api/generate",
             json={
                 "model": model,
                 "prompt": prompt,
