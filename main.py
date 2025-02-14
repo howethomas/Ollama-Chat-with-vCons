@@ -9,8 +9,20 @@ st.title("Chat with Ollama")
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# Fetch available models from Ollama
+try:
+    models_response = requests.get("http://localhost:11434/api/tags")
+    if models_response.status_code == 200:
+        available_models = [model["name"] for model in models_response.json()["models"]]
+    else:
+        available_models = ["llama2", "mistral", "codellama"]  # fallback options
+        st.warning("Could not fetch models from Ollama, using default options")
+except requests.exceptions.RequestException:
+    available_models = ["llama2", "mistral", "codellama"]  # fallback options
+    st.warning("Could not connect to Ollama, using default options")
+
 # Chat model selection
-model = st.selectbox("Select a model:", ["llama2", "mistral", "codellama"])
+model = st.selectbox("Select a model:", available_models)
 
 # Display chat messages
 for message in st.session_state.messages:
