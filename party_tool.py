@@ -1,34 +1,36 @@
+from pymongo import MongoClient
+import os
+
+DB_TYPE = os.getenv("DB_TYPE", "postgres")
+
 PARTY_TOOL = {
     "type": "function",
     "function": {
         "name": "find_by_party",
-        "description": "Returns the vcon uuis for the named party. Supports identification of matching converstaions by tel, mailto, and name.",
+        "description": "Find conversations by party name",
         "parameters": {
             "type": "object",
             "properties": {
                 "party": {
                     "type": "string",
-                    "description": "The party to find. Supports tel, mailto, and name."
+                    "description": "Name of the party to search for"
                 }
             },
             "required": ["party"]
         }
     }
-} 
+}
 
-def find_by_party(party, conn):
-	
-   # Strip the tel, mailto, or name from the party string
-	party = party.replace("tel:", "").replace("mailto:", "").replace("name:", "")
-
-	# collect all of the uuids that match the party string
-	query = """
-		SELECT vcon_uuid FROM party WHERE mailto = %s or tel = %s or name = %s
-	"""
-
-	cursor = conn.cursor()
-	cursor.execute(query, (party, party, party))
-	results = cursor.fetchall()
-	cursor.close()
-
-	return results
+def find_by_party(party, db_conn):
+    if DB_TYPE == "mongo":
+        # MongoDB query
+        collection = db_conn.conversations
+        results = list(collection.find({"parties": party}))
+        return results
+    else:
+        # PostgreSQL query
+        cursor = db_conn.cursor()
+        cursor.execute("SELECT * FROM conversations WHERE parties @> %s", ([party],))
+        results = cursor.fetchall()
+        cursor.close()
+        return results

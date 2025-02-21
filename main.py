@@ -5,21 +5,51 @@ import streamlit as st
 import requests
 import json
 # Add in postgres connection
-from psycopg2 import connect
+from pymongo import MongoClient
+import os
+from dotenv import load_dotenv
 
-# Connect to postgres
-conn = connect(
-    host="localhost",
-    database="vcon_db",
-    user="postgres",
-    password="postgres"
-)
+# Load environment variables from .env file
+load_dotenv()
 
+# Database configuration
+DB_TYPE = os.getenv("DB_TYPE", "postgres")
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_NAME = os.getenv("DB_NAME", "vcon_db")
+DB_USER = os.getenv("DB_USER", "conserver_user")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "password123")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://conserver_user:password123@localhost:27017")
 
-st.title("Chat with Ollama")
+# Print the environment variables
+print("DB_TYPE: ", DB_TYPE)
+print("DB_HOST: ", DB_HOST)
+print("DB_NAME: ", DB_NAME)
+print("DB_USER: ", DB_USER)
+print("DB_PASSWORD: ", DB_PASSWORD)
+print("MONGO_URI: ", MONGO_URI)
+
+# Connect to database based on DB_TYPE
+conn = MongoClient("mongodb://conserver_user:password123@localhost:27017")
+
+# Check to see if the database is connected
+print("conn types: ", type(conn))
+print("conn: ", conn)
+
+# Grab one vCon from the database
+vcon = conn["conserver"]["vcons"].find_one()
+print("vcon types: ", type(vcon))
+print("vcon: ", vcon)
+
+exit()
+
+st.title(f"Chat with Ollama (using {DB_TYPE})")
 
 # Ollama host configuration
-ollama_host = st.text_input("Ollama Host", value="http://localhost:11434", key="ollama_host")
+ollama_host = st.text_input(
+    "Ollama Host", 
+    value=os.getenv("OLLAMA_HOST", "http://localhost:11434"), 
+    key="ollama_host"
+)
 
 # Initialize session state for message history
 if "messages" not in st.session_state:
@@ -37,9 +67,15 @@ except requests.exceptions.RequestException:
     available_models = ["llama2", "mistral", "codellama"]  # fallback options
     st.warning("Could not connect to Ollama, using default options")
 
-# Chat model selection
-# Set the default model to llama3.2
-model = st.selectbox("Select a model:", available_models, index=available_models.index("llama3.2:latest"))
+# Update model selection to use environment default
+default_model = os.getenv("DEFAULT_MODEL", "llama3.2:latest")
+try:
+    default_index = available_models.index(default_model)
+except ValueError:
+    default_index = 0
+    st.warning(f"Default model {default_model} not found in available models")
+
+model = st.selectbox("Select a model:", available_models, index=default_index)
 
 # Create two columns for debug checkbox and clear button
 col1, col2 = st.columns(2)

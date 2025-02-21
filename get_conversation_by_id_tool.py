@@ -1,31 +1,33 @@
+from pymongo import MongoClient
+
 GET_CONVERSATION_BY_ID = {
     "type": "function",
     "function": {
         "name": "get_conversation_by_id",
-        "description": "Returns the vCons with the matching uuid.",
+        "description": "Get a conversation by its UUID",
         "parameters": {
             "type": "object",
             "properties": {
                 "uuid": {
                     "type": "string",
-                    "description": "The uuid of the vCon to get."
+                    "description": "UUID of the conversation"
                 }
             },
             "required": ["uuid"]
         }
     }
-} 
+}
 
-def get_conversation_by_id(uuid, conn):
-	
-	# Take a brute force approach to parsing the party string
-	query = """
-		SELECT * FROM vcon WHERE uuid = %s
-	"""
-
-	cursor = conn.cursor()
-	cursor.execute(query, (uuid,))
-	results = cursor.fetchall()
-	cursor.close()
-
-	return results
+def get_conversation_by_id(uuid, db_conn):
+    # MongoDB query
+    print("Using MongoDB")
+    print("db_conn types: ", type(db_conn))
+    # Use the conserver database
+    db = db_conn["conserver"]
+    print("db types: ", type(db))
+    # Use the vcons collection
+    collection = db["vcons"]
+    print("collection types: ", type(collection))
+    result = collection.find_one({"_id": uuid})
+    print("result types: ", type(result))
+    return result

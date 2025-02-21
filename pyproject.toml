@@ -12,6 +12,7 @@ pyarrow = "14"
 pymongo = "^4.11.1"
 psycopg2 = "^2.9.10"
 watchdog = "^6.0.0"
+python-dotenv = "^1.0.1"
 
 [tool.pyright]
 # https://github.com/microsoft/pyright/blob/main/docs/configuration.md
