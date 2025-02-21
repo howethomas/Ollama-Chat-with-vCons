@@ -2,7 +2,7 @@ PARTY_TOOL = {
     "type": "function",
     "function": {
         "name": "find_by_party",
-        "description": "Returns the vCons for the named party. Supports identification of matching converstaions by tel, mailto, and name.",
+        "description": "Returns the vcon uuis for the named party. Supports identification of matching converstaions by tel, mailto, and name.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -21,11 +21,9 @@ def find_by_party(party, conn):
    # Strip the tel, mailto, or name from the party string
 	party = party.replace("tel:", "").replace("mailto:", "").replace("name:", "")
 
-	# Take a brute force approach to parsing the party string
+	# collect all of the uuids that match the party string
 	query = """
-		SELECT * FROM vcon WHERE uuid IN (
-			SELECT vcon_uuid FROM party WHERE mailto = %s or tel = %s or name = %s
-		)
+		SELECT vcon_uuid FROM party WHERE mailto = %s or tel = %s or name = %s
 	"""
 
 	cursor = conn.cursor()

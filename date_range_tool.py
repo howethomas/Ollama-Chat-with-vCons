@@ -2,7 +2,7 @@ DATE_RANGE_TOOL = {
     "type": "function",
     "function": {
         "name": "find_by_date_range",
-        "description": "Returns the vCons where the created_at date is between the start and end dates.",
+        "description": "Returns the vcon uuids where the created_at date is between the start and end dates.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -24,7 +24,7 @@ def find_by_date_range(start_date, end_date, conn):
 	
 	# Take a brute force approach to parsing the party string
 	query = """
-		SELECT * FROM vcon WHERE created_at BETWEEN %s AND %s
+		SELECT uuid FROM vcon WHERE created_at BETWEEN %s AND %s
 	"""
 
 	cursor = conn.cursor()
