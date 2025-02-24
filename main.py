@@ -15,6 +15,8 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "api_provider" not in st.session_state:
     st.session_state.api_provider = "ollama"
+if "system_prompt" not in st.session_state:
+    st.session_state.system_prompt = """You are a helpful AI assistant. You can help users search through conversation records using date ranges, party names, or conversation IDs."""
 
 # Load environment variables from .env file
 load_dotenv()
@@ -26,81 +28,88 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 # Connect to database
 conn = MongoClient(MONGO_URI)
 
-# API provider selection
-api_provider = st.radio(
-    "Select API Provider",
-    ["ollama", "openai"],
-    key="api_provider"
-)
-
-if api_provider == "ollama":
-    # Ollama configuration
-    ollama_host = st.text_input(
-        "Ollama Host", 
-        value=os.getenv("OLLAMA_HOST", "http://localhost:11434"), 
-        key="ollama_host"
+# Move configuration elements to sidebar
+with st.sidebar:
+    st.header("Configuration")
+    
+    # API provider selection
+    api_provider = st.radio(
+        "Select API Provider",
+        ["ollama", "openai"],
+        key="api_provider"
     )
+    
+    # System prompt configuration
+    system_prompt = st.text_area(
+        "System Prompt (defines assistant behavior)",
+        value=st.session_state.system_prompt,
+        key="system_prompt",
+        height=100
+    )
+    
+    if st.button("Reset System Prompt"):
+        st.session_state.system_prompt = """You are a helpful AI assistant. You can help users search through conversation records using date ranges, party names, or conversation IDs."""
+        st.rerun()
 
-    # Fetch available models from Ollama
-    try:
-        models_response = requests.get(f"{ollama_host}/api/tags")
-        if models_response.status_code == 200:
-            available_models = [model["name"] for model in models_response.json()["models"]]
-        else:
+    if api_provider == "ollama":
+        # Ollama configuration
+        ollama_host = st.text_input(
+            "Ollama Host", 
+            value=os.getenv("OLLAMA_HOST", "http://localhost:11434"), 
+            key="ollama_host"
+        )
+        
+        # Fetch available models from Ollama
+        try:
+            models_response = requests.get(f"{ollama_host}/api/tags")
+            if models_response.status_code == 200:
+                available_models = [model["name"] for model in models_response.json()["models"]]
+            else:
+                available_models = ["llama2", "mistral", "codellama"]
+                st.warning("Could not fetch models from Ollama, using default options")
+        except requests.exceptions.RequestException:
             available_models = ["llama2", "mistral", "codellama"]
-            st.warning("Could not fetch models from Ollama, using default options")
-    except requests.exceptions.RequestException:
-        available_models = ["llama2", "mistral", "codellama"]
-        st.warning("Could not connect to Ollama, using default options")
+            st.warning("Could not connect to Ollama, using default options")
 
-    default_model = os.getenv("DEFAULT_MODEL", "llama2")
-    try:
-        default_index = available_models.index(default_model)
-    except ValueError:
-        default_index = 0
-        st.warning(f"Default model {default_model} not found in available models")
+        default_model = os.getenv("DEFAULT_MODEL", "llama2")
+        try:
+            default_index = available_models.index(default_model)
+        except ValueError:
+            default_index = 0
+            st.warning(f"Default model {default_model} not found in available models")
 
-else:  # OpenAI configuration
-    openai.api_key = OPENAI_API_KEY
-    if not OPENAI_API_KEY:
-        st.error("OpenAI API key not found. Please set OPENAI_API_KEY in your .env file.")
-        st.stop()
+    else:  # OpenAI configuration
+        openai.api_key = OPENAI_API_KEY
+        if not OPENAI_API_KEY:
+            st.error("OpenAI API key not found. Please set OPENAI_API_KEY in your .env file.")
+            st.stop()
+        
+        # Fetch available models from OpenAI
+        try:
+            models = openai.models.list()
+            available_models = [
+                model.id for model in models 
+                if model.id.startswith(('gpt-3.5', 'gpt-4', 'o1', 'o3')) and 'instruct' not in model.id
+            ]
+            available_models.sort()
+        except openai.OpenAIError as e:
+            st.warning("Could not fetch models from OpenAI, using default options")
+            available_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"]
+        
+        default_model = os.getenv("DEFAULT_OPENAI_MODEL", "gpt-3.5-turbo")
+        default_index = available_models.index(default_model) if default_model in available_models else 0
+
+    model = st.selectbox("Select a model:", available_models, index=default_index)
     
-    # Fetch available models from OpenAI
-    try:
-        models = openai.models.list()
-        # Filter for chat-capable models (GPT models)
-        available_models = [
-            model.id for model in models 
-            if model.id.startswith(('gpt-3.5', 'gpt-4')) and 'instruct' not in model.id
-        ]
-        available_models.sort()  # Sort models alphabetically
-    except openai.OpenAIError as e:
-        st.warning("Could not fetch models from OpenAI, using default options")
-        available_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"]
-    
-    default_model = os.getenv("DEFAULT_OPENAI_MODEL", "gpt-3.5-turbo")
-    default_index = available_models.index(default_model) if default_model in available_models else 0
-
-model = st.selectbox("Select a model:", available_models, index=default_index)
-
-# Create two columns for debug checkbox and clear button
-col1, col2 = st.columns(2)
-
-# Set a checkbox to show debug messages in the first column
-with col1:
+    # Debug options
     show_debug = st.checkbox("Show debug messages", value=False)
-
-# Add a clear button in the second column
-with col2:
+    
     if st.button("Clear Chat"):
         st.session_state.messages = []
         st.rerun()
 
-# Debug check
-if not hasattr(st.session_state, 'messages'):
-    st.warning("Session state 'messages' not initialized!")
-    st.session_state.messages = []
+# Main chat area
+st.title("Chat Interface")
 
 # Display chat messages
 for message in st.session_state.messages:
@@ -123,6 +132,12 @@ if prompt := st.chat_input("What would you like to ask?"):
     try:
         # Convert session messages to API format with explicit handling
         api_messages = []
+        # Add system message first if it exists
+        if st.session_state.system_prompt.strip():
+            api_messages.append({
+                "role": "system",
+                "content": st.session_state.system_prompt
+            })
         for msg in st.session_state.messages:
             if msg["role"] == "tool":
                 # For OpenAI, convert tool messages to function messages
@@ -169,11 +184,18 @@ if prompt := st.chat_input("What would you like to ask?"):
                 st.stop()
 
         else:  # OpenAI
-            response = openai.chat.completions.create(
-                model=model,
-                messages=api_messages,
-                tools=[PARTY_TOOL, DATE_RANGE_TOOL, GET_CONVERSATION_BY_ID]
-            )
+            if model.startswith('o3'):
+                # For o3 models, skip tools and only use basic chat
+                response = openai.chat.completions.create(
+                    model=model,
+                    messages=[msg for msg in api_messages if msg["role"] not in ["function", "tool"]]
+                )
+            else:
+                response = openai.chat.completions.create(
+                    model=model,
+                    messages=api_messages,
+                    tools=[PARTY_TOOL, DATE_RANGE_TOOL, GET_CONVERSATION_BY_ID]
+                )
             
             assistant_response = response.choices[0].message.content
             tool_calls = response.choices[0].message.tool_calls or []
@@ -183,7 +205,8 @@ if prompt := st.chat_input("What would you like to ask?"):
             
         # Handle tool calls
         if tool_calls:
-            st.write("Tool calls:", tool_calls)
+            if show_debug:
+                st.write("Tool calls:", tool_calls)
             for tool_call in tool_calls:
                 function_name = (tool_call.function.name 
                                if api_provider == "openai" 
@@ -198,19 +221,20 @@ if prompt := st.chat_input("What would you like to ask?"):
 
                 if function_name == "find_by_party":
                     party = arguments["party"]
-                    st.write(f"Finding vCons for party: {party}")
+                    if show_debug:
+                        st.write(f"Finding vCons for party: {party}")
                     results = find_by_party(party, conn)
                 elif function_name == "find_by_date_range":
                     start_date = arguments["start_date"]
                     end_date = arguments["end_date"]
-                    st.write(f"Finding vCons for date range: {start_date} to {end_date}")
+                    if show_debug:
+                        st.write(f"Finding vCons for date range: {start_date} to {end_date}")
                     results = find_by_date_range(start_date, end_date, conn)
                 elif function_name == "get_conversation_by_id":
                     uuids = arguments["uuids"]
-                    st.write(f"Getting vCons for uuids: {uuids}")
+                    if show_debug:
+                        st.write(f"Getting vCons for uuids: {uuids}")
                     results = get_conversation_by_id(uuids, conn)
-
-                st.write(results)
                 
                 # Add tool results to message history with the correct format
                 if api_provider == "ollama":
@@ -247,11 +271,18 @@ if prompt := st.chat_input("What would you like to ask?"):
                             # TODO: Log the error
                             st.error(f"Error: {final_response}")
                 else:  # OpenAI
-                    final_response = openai.chat.completions.create(
-                        model=model,
-                        messages=[msg for msg in st.session_state.messages if msg.get("content") is not None],
-                        tools=[PARTY_TOOL, DATE_RANGE_TOOL, GET_CONVERSATION_BY_ID]
-                    )
+                    if model.startswith('o3'):
+                        final_response = openai.chat.completions.create(
+                            model=model,
+                            messages=[msg for msg in st.session_state.messages 
+                                     if msg.get("content") is not None and msg["role"] not in ["function", "tool"]]
+                        )
+                    else:
+                        final_response = openai.chat.completions.create(
+                            model=model,
+                            messages=[msg for msg in st.session_state.messages if msg.get("content") is not None],
+                            tools=[PARTY_TOOL, DATE_RANGE_TOOL, GET_CONVERSATION_BY_ID]
+                        )
                     assistant_response = final_response.choices[0].message.content
                     if assistant_response is None and not final_response.choices[0].message.tool_calls:
                         assistant_response = "I apologize, but I encountered an error processing the response. Please try asking your question again."
@@ -278,5 +309,7 @@ if prompt := st.chat_input("What would you like to ask?"):
         else:
             st.info("Check your OpenAI API key and connection.")
 
-with st.expander("Debug"):
-    st.write(st.session_state.messages)
+# Replace the always-visible debug expander with a conditional one
+if show_debug:
+    with st.expander("Debug"):
+        st.write(st.session_state.messages)
