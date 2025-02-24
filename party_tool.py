@@ -1,7 +1,6 @@
 from pymongo import MongoClient
 import os
 
-DB_TYPE = os.getenv("DB_TYPE", "postgres")
 
 PARTY_TOOL = {
     "type": "function",
@@ -22,15 +21,15 @@ PARTY_TOOL = {
 }
 
 def find_by_party(party, db_conn):
-    if DB_TYPE == "mongo":
-        # MongoDB query
-        collection = db_conn.conversations
-        results = list(collection.find({"parties": party}))
-        return results
-    else:
-        # PostgreSQL query
-        cursor = db_conn.cursor()
-        cursor.execute("SELECT * FROM conversations WHERE parties @> %s", ([party],))
-        results = cursor.fetchall()
-        cursor.close()
-        return results
+    # MongoDB query to match party across tel, mailto, or name fields in parties array
+    collection = db_conn.get_database('conserver').get_collection('vcons')
+    query = {
+        "$or": [
+            {"parties.tel": party},
+            {"parties.mailto": party},
+            {"parties.name": party}
+        ]
+    }
+    results = list(collection.find(query, {"uuid": 1, "_id": 0}))
+    # Extract and return just the UUIDs
+    return [doc["uuid"] for doc in results]

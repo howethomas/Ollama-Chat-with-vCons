@@ -4,22 +4,35 @@ GET_CONVERSATION_BY_ID = {
     "type": "function",
     "function": {
         "name": "get_conversation_by_id",
-        "description": "Get a conversation by its UUID",
+        "description": "Get one or more conversations by their UUIDs (maximum 10)",
         "parameters": {
             "type": "object",
             "properties": {
-                "uuid": {
-                    "type": "string",
-                    "description": "UUID of the conversation"
+                "uuids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "List of UUIDs of the conversations (max 10)",
+                    "maxItems": 10
                 }
             },
-            "required": ["uuid"]
+            "required": ["uuids"]
         }
     }
 }
 
-def get_conversation_by_id(uuid, db_conn):
+def get_conversation_by_id(uuids, db_conn):
+    # Ensure uuids is a list
+    if isinstance(uuids, str):
+        uuids = [uuids]
+    
+    # Limit to maximum 10 UUIDs
+    uuids = uuids[:10]
+    
     db = db_conn["conserver"]
     collection = db["vcons"]
-    result = collection.find_one({"uuid": uuid})
-    return result
+    
+    # Find all conversations matching the UUIDs
+    results = list(collection.find({"uuid": {"$in": uuids}}))
+    return results
