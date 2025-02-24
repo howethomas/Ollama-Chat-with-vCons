@@ -9,51 +9,28 @@ from pymongo import MongoClient
 import os
 from dotenv import load_dotenv
 
+# Initialize session state for message history
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
 # Load environment variables from .env file
 load_dotenv()
 
 # Database configuration
-DB_TYPE = os.getenv("DB_TYPE", "postgres")
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_NAME = os.getenv("DB_NAME", "vcon_db")
-DB_USER = os.getenv("DB_USER", "conserver_user")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "password123")
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://conserver_user:password123@localhost:27017")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 
 # Print the environment variables
-print("DB_TYPE: ", DB_TYPE)
-print("DB_HOST: ", DB_HOST)
-print("DB_NAME: ", DB_NAME)
-print("DB_USER: ", DB_USER)
-print("DB_PASSWORD: ", DB_PASSWORD)
 print("MONGO_URI: ", MONGO_URI)
 
 # Connect to database based on DB_TYPE
-conn = MongoClient("mongodb://conserver_user:password123@localhost:27017")
-
-# Check to see if the database is connected
-print("conn types: ", type(conn))
-print("conn: ", conn)
-
-# Grab one vCon from the database
-vcon = conn["conserver"]["vcons"].find_one()
-print("vcon types: ", type(vcon))
-print("vcon: ", vcon)
-
-exit()
-
-st.title(f"Chat with Ollama (using {DB_TYPE})")
-
+conn = MongoClient(MONGO_URI)
+    
 # Ollama host configuration
 ollama_host = st.text_input(
     "Ollama Host", 
     value=os.getenv("OLLAMA_HOST", "http://localhost:11434"), 
     key="ollama_host"
 )
-
-# Initialize session state for message history
-if "messages" not in st.session_state:
-    st.session_state.messages = []
 
 # Fetch available models from Ollama
 try:
@@ -89,6 +66,11 @@ with col2:
     if st.button("Clear Chat"):
         st.session_state.messages = []
         st.rerun()
+
+# Debug check
+if not hasattr(st.session_state, 'messages'):
+    st.warning("Session state 'messages' not initialized!")
+    st.session_state.messages = []
 
 # Display chat messages
 for message in st.session_state.messages:
