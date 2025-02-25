@@ -1,6 +1,9 @@
 from pymongo import MongoClient
-import os
+from config import config
 
+# Update environment variables
+DB_NAME = config["db_name"]
+COLLECTION_NAME = config["collection_name"]
 
 PARTY_TOOL = {
     "type": "function",
@@ -22,7 +25,7 @@ PARTY_TOOL = {
 
 def find_by_party(party, db_conn):
     # MongoDB query to match party across tel, mailto, or name fields in parties array
-    collection = db_conn.get_database('conserver').get_collection('vcons')
+    collection = db_conn[DB_NAME][COLLECTION_NAME]
     query = {
         "$or": [
             {"parties.tel": party},

@@ -1,8 +1,10 @@
 from pymongo import MongoClient
-import os
 from datetime import datetime
+from config import config
 
-DB_TYPE = os.getenv("DB_TYPE", "postgres")
+# Update environment variables
+DB_NAME = config["db_name"]
+COLLECTION_NAME = config["collection_name"]
 
 DATE_RANGE_TOOL = {
     "type": "function",
@@ -32,8 +34,8 @@ def find_by_date_range(start_date, end_date, db_conn):
     end_iso = end_date if isinstance(end_date, str) else end_date.isoformat()
     
     # MongoDB query
-    db = db_conn["conserver"]  # Specify the database name
-    collection = db["vcons"]    # Specify the collection name
+    db = db_conn[DB_NAME]  # Use environment variable
+    collection = db[COLLECTION_NAME]  # Use environment variable
     
     # Only retrieve the uuid field and modify the query to return just UUIDs
     results = list(collection.find(
