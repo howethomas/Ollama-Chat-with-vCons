@@ -9,7 +9,7 @@ DEFAULT_CONFIG = {
     "collection_name": "vcons",
     "openai_api_key": "",
     "ollama_host": "http://localhost:11434",
-    "default_model": "llama2",
+    "default_model": "llama3.2:latest",
     "default_openai_model": "gpt-3.5-turbo"
 }
 

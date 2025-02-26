@@ -35,4 +35,5 @@ def find_by_party(party, db_conn):
     }
     results = list(collection.find(query, {"uuid": 1, "_id": 0}))
     # Extract and return just the UUIDs
+    print(results)
     return [doc["uuid"] for doc in results]

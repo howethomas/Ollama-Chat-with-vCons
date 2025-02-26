@@ -1,5 +1,6 @@
 from pymongo import MongoClient
 from config import config
+import logging
 
 # Update environment variables
 DB_NAME = config["db_name"]
@@ -27,7 +28,7 @@ GET_CONVERSATION_BY_ID = {
     }
 }
 
-def get_conversation_by_id(uuids, db_conn):
+def get_conversation_by_id(uuids, db_conn, max_results=20):
     # Ensure uuids is a list
     if isinstance(uuids, str):
         uuids = [uuids]
@@ -55,11 +56,13 @@ def get_conversation_by_id(uuids, db_conn):
                 print("Sample UUID format:", sample_doc['uuid'])
         
         # Now perform the search
-        results = list(collection.find(
-            {"uuid": {"$in": uuids}},
-            max_time_ms=5000
-        ))
+        query_filter = {"uuid": {"$in": uuids}}
+        results = list(collection.find(query_filter))[:max_results]
         print(f"Found {len(results)} results")
+        
+        if len(results) > max_results:
+            print(f"Result set truncated: {len(results)} items found, returning first {max_results}")
+        
         return results
     except Exception as e:
         print(f"Error querying MongoDB: {str(e)}")
