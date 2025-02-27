@@ -1,6 +1,7 @@
 from party_tool import PARTY_TOOL, find_by_party
 from date_range_tool import DATE_RANGE_TOOL, find_by_date_range
 from get_conversation_by_id_tool import GET_CONVERSATION_BY_ID, get_conversation_by_id
+from milvus_search_tool import MILVUS_SEARCH_TOOL, search_in_milvus
 import streamlit as st
 import requests
 import json
@@ -15,6 +16,7 @@ import datetime
 import traceback
 import hashlib
 import time
+from milvus_search_tool import MILVUS_SEARCH_TOOL  # Import the new tool
 
 # Configure logging
 logging.basicConfig(
@@ -26,6 +28,20 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger("llm_api")
+
+# Function to check if a model supports function calling
+def model_supports_function_calling(model_name):
+    # List of models known to support function calling
+    # Update this list as OpenAI releases new models or changes capabilities
+    function_calling_models = [
+        model for model in [
+            "gpt-4", "gpt-4-turbo", "gpt-4-vision-preview", "gpt-4-1106-preview", 
+            "gpt-4-0613", "gpt-4-32k", "gpt-4-32k-0613", "gpt-4o", 
+            "gpt-3.5-turbo", "gpt-3.5-turbo-1106", "gpt-3.5-turbo-0613",
+            "o1-preview", "o1-mini", "o3-mini"
+        ] if model in model_name
+    ]
+    return len(function_calling_models) > 0
 
 # Initialize session state for message history and settings
 if "messages" not in st.session_state:
@@ -50,12 +66,6 @@ conn = MongoClient(MONGO_URI)
 with st.sidebar:
     st.header("Configuration?")
     
-    # API provider selection
-    api_provider = st.radio(
-        "Select API Provider",
-        ["openai","ollama"],
-        key="api_provider"
-    )
     
     # System prompt configuration
     system_prompt = st.text_area(
@@ -68,58 +78,25 @@ with st.sidebar:
         st.session_state.system_prompt = """You are a helpful AI assistant. You can help users search through conversation records using date ranges, party names, or conversation IDs."""
         st.rerun()
 
-    if api_provider == "ollama":
-        # Ollama configuration
-        ollama_host = st.text_input(
-            "Ollama Host", 
-            value=config["ollama_host"],
-            key="ollama_host"
-        )
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    if not OPENAI_API_KEY:
+        st.error("OpenAI API key not found. Please set OPENAI_API_KEY in your .env file.")
+        st.stop()
+    
+    # Fetch available models from OpenAI
+    try:
+        models = client.models.list()
+        available_models = [
+            model.id for model in models 
+            if model.id.startswith(('gpt-3.5', 'gpt-4', 'o1', 'o3')) and 'instruct' not in model.id
+        ]
+        available_models.sort()
+    except openai.OpenAIError as e:
+        st.warning("Could not fetch models from OpenAI, using default options")
+        available_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"]
         
-        # Fetch available models from Ollama
-        try:
-            models_response = requests.get(f"{ollama_host}/api/tags")
-            if models_response.status_code == 200:
-                available_models = [model["name"] for model in models_response.json()["models"]]
-                print(available_models)
-            else:
-                available_models = ["llama3.1", "llama3.1:8b", "llama3.1:70b"]
-                st.warning("Could not fetch models from Ollama, using default options")
-        except requests.exceptions.RequestException:
-            available_models = ["llama3.1", "llama3.1:8b", "llama3.1:70b"]
-            st.warning("Could not connect to Ollama, using default options")
-
-        default_model = config["default_model"]
-        print(config)
-        print(default_model)
-        print(available_models)
-        print(available_models.index(default_model))
-        try:
-            default_index = available_models.index(default_model)
-        except ValueError:
-            default_index = 0
-            st.warning(f"Default model {default_model} not found in available models")
-
-    else:  # OpenAI configuration
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        if not OPENAI_API_KEY:
-            st.error("OpenAI API key not found. Please set OPENAI_API_KEY in your .env file.")
-            st.stop()
-        
-        # Fetch available models from OpenAI
-        try:
-            models = client.models.list()
-            available_models = [
-                model.id for model in models 
-                if model.id.startswith(('gpt-3.5', 'gpt-4', 'o1', 'o3')) and 'instruct' not in model.id
-            ]
-            available_models.sort()
-        except openai.OpenAIError as e:
-            st.warning("Could not fetch models from OpenAI, using default options")
-            available_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"]
-        
-        default_model = config["default_openai_model"]
-        default_index = available_models.index(default_model) if default_model in available_models else 0
+    default_model = config["default_openai_model"]
+    default_index = available_models.index(default_model) if default_model in available_models else 0
 
     model = st.selectbox("Select a model:", available_models, index=default_index)
     
@@ -130,6 +107,42 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
     
+    # Initialize debug log container in session state if not exists
+    if "debug_logs" not in st.session_state:
+        st.session_state.debug_logs = []
+
+    # Create a debug log area if debug is enabled
+    if show_debug:
+        with st.sidebar:
+            st.header("Debug Logs")
+            if st.button("Clear Debug Logs"):
+                st.session_state.debug_logs = []
+                st.rerun()
+            with st.expander("View Logs", expanded=True):
+                for log in st.session_state.debug_logs:
+                    st.text(log)
+
+# Helper function to log messages both to logger and UI if debug is enabled
+def log_message(level, message):
+    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+    formatted_message = f"[{timestamp}] {level}: {message}"
+    
+    # Log to logger
+    if level == "INFO":
+        logger.info(message)
+    elif level == "DEBUG":
+        logger.debug(message)
+    elif level == "WARNING":
+        logger.warning(message)
+    elif level == "ERROR":
+        logger.error(message)
+    
+    # Add to UI if debug is enabled
+    if show_debug:
+        st.session_state.debug_logs.append(formatted_message)
+        # Keep only the last 100 messages to avoid memory issues
+        if len(st.session_state.debug_logs) > 100:
+            st.session_state.debug_logs = st.session_state.debug_logs[-100:]
 
 # Main chat area
 st.title("Chat Interface")
@@ -137,8 +150,8 @@ st.title("Chat Interface")
 # Display chat messages
 for message in st.session_state.messages:
     role = message["role"]
-    # Skip function messages in display
-    if role == "function":
+    # Skip function and tool messages in display
+    if role in ["function", "tool"]:
         continue
     with st.chat_message(role):
         st.write(message["content"])
@@ -165,280 +178,201 @@ if prompt := st.chat_input("What would you like to ask?"):
                 "role": "system",
                 "content": st.session_state.system_prompt
             })
+            
+        # Add all user and assistant messages directly
         for msg in st.session_state.messages:
-            if msg["role"] == "tool":
-                # For OpenAI, convert tool messages to function messages
-                if api_provider == "openai":
-                    # Try to extract function name from content if possible
-                    if "find_by_date_range" in str(msg["content"]).lower():
-                        function_name = "find_by_date_range"
-                    elif "find_by_party" in str(msg["content"]).lower():
-                        function_name = "find_by_party"
-                    elif "get_conversation_by_id" in str(msg["content"]).lower():
-                        function_name = "get_conversation_by_id"
-                    else:
-                        # Skip tool messages we can't properly convert
-                        continue
-                    
-                    api_messages.append({
-                        "role": "function",
-                        "name": function_name,
-                        "content": msg["content"]
-                    })
-            else:
+            # Skip function/tool messages as they'll be handled differently
+            if msg["role"] not in ["function", "tool"]:
                 api_messages.append(msg)
 
-        if show_debug:
-            print("Processed API Messages:", api_messages)
-
-        # Initialize a variable to store the final assistant response
-        assistant_response = None
+        # Check if the selected model supports function calling
+        supports_function_calling = model_supports_function_calling(model)
         
-        # Safety counter to prevent infinite tool calling loops
-        tool_call_count = 0
-        max_tool_calls = 10  # Increased from 5 to 10 for complex queries
+        # Max number of iterations to prevent infinite loops
+        max_iterations = 5
+        current_iteration = 0
         
-        # Main tool calling loop
-        while tool_call_count < max_tool_calls:
-            tool_call_count += 1
+        # Process conversation with function calls in a loop
+        while current_iteration < max_iterations:
+            current_iteration += 1
+            log_message("INFO", f"Starting conversation iteration {current_iteration}/{max_iterations}")
             
-            try:
-                logger.info(f"API call #{tool_call_count} to {api_provider} with model {model}")
+            # Call OpenAI API with current messages and tools
+            log_message("INFO", f"OpenAI call with model {model}")
+            if show_debug:
+                log_message("DEBUG", f"Messages for API call: {json.dumps(api_messages, indent=2)}")
+            
+            # Only include tools if the model supports function calling
+            if supports_function_calling:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=api_messages,
+                    tools=[PARTY_TOOL, DATE_RANGE_TOOL, GET_CONVERSATION_BY_ID, MILVUS_SEARCH_TOOL]
+                )
+            else:
+                log_message("WARNING", f"Model {model} may not support function calling. Using without tools.")
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=api_messages
+                )
+            
+            log_message("INFO", f"OpenAI response received (finish_reason: {response.choices[0].finish_reason})")
+            
+            # Get assistant response and tool calls
+            assistant_message = response.choices[0].message
+            assistant_response = assistant_message.content
+            tool_calls = assistant_message.tool_calls or [] if supports_function_calling else []
+            
+            # Add the assistant message to the conversation history with tool_calls if present
+            assistant_api_message = {
+                "role": "assistant",
+                "content": assistant_response or ""
+            }
+            
+            # Include tool_calls if present to ensure proper message structure
+            if tool_calls:
+                assistant_api_message["tool_calls"] = [
+                    {
+                        "id": tool_call.id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_call.function.name,
+                            "arguments": tool_call.function.arguments
+                        }
+                    } for tool_call in tool_calls
+                ]
+            
+            # Add the assistant message to the API messages array
+            api_messages.append(assistant_api_message)
+            
+            # Add a simplified version to session state for display
+            if assistant_response:
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": assistant_response
+                })
+                
+                # Display the assistant's response
+                with st.chat_message("assistant"):
+                    st.write(assistant_response)
+            
+            # If no tool calls, we're done with this conversation
+            if not tool_calls:
+                log_message("INFO", "No tool calls requested, conversation complete")
+                break
+                
+            log_message("INFO", f"OpenAI requested {len(tool_calls)} tool calls")
+            
+            # Process each tool call
+            for tool_call in tool_calls:
+                function_name = tool_call.function.name
+                arguments = json.loads(tool_call.function.arguments)
+                tool_call_id = tool_call.id
+                
+                # Generate a hash of this tool call to detect duplicates
+                call_hash = hashlib.md5(f"{function_name}:{json.dumps(arguments, sort_keys=True)}".encode()).hexdigest()
+                
+                # Skip this tool call if we've seen it before
+                if call_hash in st.session_state.seen_tool_calls:
+                    log_message("WARNING", f"Skipping duplicate tool call: {function_name} with args {arguments}")
+                    continue
+                
+                # Add this call to the seen set
+                st.session_state.seen_tool_calls.add(call_hash)
+                
+                log_message("INFO", f"Executing tool: {function_name}")
+                log_message("DEBUG", f"Tool arguments: {json.dumps(arguments, indent=2)}")
+                
+                # Execute the appropriate tool
+                try:
+                    if function_name == "find_by_party":
+                        party = arguments["party"]
+                        log_message("INFO", f"find_by_party tool call with party: {party}")
+                        results = find_by_party(party, conn)
+                    elif function_name == "find_by_date_range":
+                        start_date = arguments["start_date"]
+                        end_date = arguments["end_date"]
+                        log_message("INFO", f"find_by_date_range tool call with range: {start_date} to {end_date}")
+                        results = find_by_date_range(start_date, end_date, conn)
+                    elif function_name == "get_conversation_by_id":
+                        uuids = arguments["uuids"]
+                        # Limit number of UUIDs to process
+                        if isinstance(uuids, list) and len(uuids) > 20:
+                            log_message("WARNING", f"Too many UUIDs requested: {len(uuids)}. Limiting to 20.")
+                            uuids = uuids[:20]
+                        results = get_conversation_by_id(uuids, conn)
+                    elif function_name == "search_in_milvus":
+                        search_text = arguments["search_text"]
+                        log_message("INFO", f"search_in_milvus tool call with search_text: {search_text}")
+                        results = search_in_milvus(search_text)
+                    else:
+                        error_msg = f"Unknown function: {function_name}"
+                        log_message("ERROR", error_msg)
+                        results = f"Error: {error_msg}"
+                    
+                    # Log results summary
+                    if isinstance(results, list):
+                        log_message("INFO", f"Tool {function_name} returned {len(results)} results")
+                        if show_debug and len(results) > 0:
+                            sample_size = min(3, len(results))
+                            sample = results[:sample_size]
+                            log_message("DEBUG", f"Sample of results: {sample}")
+                    else:
+                        log_message("INFO", f"Tool {function_name} execution completed")
+                        if show_debug and results:
+                            result_preview = str(results)[:200] + "..." if len(str(results)) > 200 else str(results)
+                            log_message("DEBUG", f"Result preview: {result_preview}")
+                    
+                except Exception as e:
+                    error_trace = traceback.format_exc()
+                    log_message("ERROR", f"Error executing tool {function_name}: {str(e)}")
+                    log_message("ERROR", f"Traceback: {error_trace}")
+                    results = f"Error executing tool {function_name}: {str(e)}"
+                
+                # Add tool results to conversation with the correct format for OpenAI
+                tool_message = {
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": str(results)
+                }
+                
+                # Add to session state
+                st.session_state.messages.append({
+                    "role": "tool",  # Use 'tool' for session state too for consistency
+                    "name": function_name,
+                    "content": str(results)
+                })
+                
+                # Add to API messages for next round
+                api_messages.append(tool_message)
+                
                 if show_debug:
-                    logger.debug(f"Request messages: {json.dumps(api_messages, indent=2)}")
-                
-                if api_provider == "ollama":
-                    request_data = {
-                        "model": model,
-                        "messages": api_messages,
-                        "stream": False,
-                        "tools": [PARTY_TOOL, DATE_RANGE_TOOL, GET_CONVERSATION_BY_ID]
-                    }
-                    logger.info(f"Sending request to Ollama: {ollama_host}/api/chat")
-                    
-                    response = requests.post(
-                        f"{ollama_host}/api/chat",
-                        json=request_data
-                    )
-                    
-                    if response.status_code == 200:
-                        response_json = response.json()
-                        logger.info(f"Ollama response received (status: {response.status_code})")
-                        logger.debug(f"Ollama response: {json.dumps(response_json, indent=2)}")
-                        
-                        assistant_response = response_json["message"]["content"]
-                        tool_calls = response_json["message"].get("tool_calls", [])
-                        
-                        if tool_calls:
-                            logger.info(f"Ollama requested {len(tool_calls)} tool calls")
-                    else:
-                        logger.error(f"Ollama error: {response.status_code} - {response.text}")
-                        st.error(f"Error: {response.status_code}")
-                        st.stop()
-
-                else:  # OpenAI
-                    if model.startswith(('o1', 'o3')):
-                        # For Claude models (o1, o3), skip tools and system messages
-                        filtered_messages = [msg for msg in api_messages if msg["role"] not in ["function", "tool", "system"]]
-                        
-                        # If we have a system message, prepend it to the first user message instead
-                        system_content = None
-                        for msg in api_messages:
-                            if msg["role"] == "system":
-                                system_content = msg["content"]
-                                break
-                        
-                        # Prepend system message to first user message if found
-                        if system_content and filtered_messages:
-                            for i, msg in enumerate(filtered_messages):
-                                if msg["role"] == "user":
-                                    filtered_messages[i]["content"] = f"{system_content}\n\n{msg['content']}"
-                                    break
-                        
-                        logger.info(f"OpenAI call with Claude model {model} (without tools)")
-                        logger.debug(f"Filtered messages for Claude: {json.dumps(filtered_messages, indent=2)}")
-                        
-                        response = client.chat.completions.create(
-                            model=model,
-                            messages=filtered_messages,
-                            max_tokens=4000  # Ensure we get a complete response
-                        )
-                    else:
-                        logger.info(f"OpenAI call with model {model} (with tools)")
-                        
-                        response = client.chat.completions.create(
-                            model=model,
-                            messages=api_messages,
-                            tools=[PARTY_TOOL, DATE_RANGE_TOOL, GET_CONVERSATION_BY_ID]
-                        )
-                    
-                    logger.info(f"OpenAI response received (finish_reason: {response.choices[0].finish_reason})")
-                    
-                    # Log response details (safely handling potentially large responses)
-                    if show_debug:
-                        try:
-                            logger.debug(f"OpenAI response: {response}")
-                        except Exception as e:
-                            logger.debug(f"OpenAI response too large to log directly: {str(e)}")
-                        
-                    assistant_response = response.choices[0].message.content
-                    tool_calls = response.choices[0].message.tool_calls or []
-                    
-                    if tool_calls:
-                        logger.info(f"OpenAI requested {len(tool_calls)} tool calls")
-
-                # Add the assistant response to messages (without tools)
-                if assistant_response:
-                    # Add the assistant's message to the session history
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": assistant_response
-                    })
-                    
-                    # Also add to API messages for the next round
-                    api_messages.append({
-                        "role": "assistant",
-                        "content": assistant_response
-                    })
-                
-                # If there are no tool calls, break the loop
-                if not tool_calls:
-                    break
-                
-                # Process tool calls with added loop detection
-                if tool_calls:
-                    if show_debug:
-                        logger.debug(f"Tool calls in iteration {tool_call_count}: {tool_calls}")
-                        
-                    for tool_call in tool_calls:
-                        function_name = (tool_call.function.name 
-                                       if api_provider == "openai" 
-                                       else tool_call["function"]["name"])
-                        
-                        arguments = (json.loads(tool_call.function.arguments) 
-                                   if api_provider == "openai" 
-                                   else tool_call["function"]["arguments"])
-
-                        # Generate a hash of this tool call to detect duplicates
-                        call_hash = hashlib.md5(f"{function_name}:{json.dumps(arguments, sort_keys=True)}".encode()).hexdigest()
-                        
-                        # Skip this tool call if we've seen it before
-                        if call_hash in st.session_state.seen_tool_calls:
-                            logger.warning(f"Skipping duplicate tool call: {function_name} with args {arguments}")
-                            continue
-                        
-                        # Add this call to the seen set
-                        st.session_state.seen_tool_calls.add(call_hash)
-
-                        logger.info(f"Executing tool: {function_name}")
-                        logger.debug(f"Tool arguments: {json.dumps(arguments, indent=2)}")
-
-                        # Execute the appropriate tool
-                        try:
-                            if function_name == "find_by_party":
-                                party = arguments["party"]
-                                logger.info(f"find_by_party tool call with party: {party}")
-                                results = find_by_party(party, conn)
-                            elif function_name == "find_by_date_range":
-                                start_date = arguments["start_date"]
-                                end_date = arguments["end_date"]
-                                logger.info(f"find_by_date_range tool call with range: {start_date} to {end_date}")
-                                results = find_by_date_range(start_date, end_date, conn)
-                            elif function_name == "get_conversation_by_id":
-                                uuids = arguments["uuids"]
-                                # Limit number of UUIDs to process
-                                if isinstance(uuids, list) and len(uuids) > 20:
-                                    logger.warning(f"Too many UUIDs requested: {len(uuids)}. Limiting to 20.")
-                                    uuids = uuids[:20]
-                                results = get_conversation_by_id(uuids, conn)
-                            else:
-                                error_msg = f"Unknown function: {function_name}"
-                                logger.error(error_msg)
-                                results = f"Error: {error_msg}"
-                            
-                            # Log results summary (not full results which might be large)
-                            if isinstance(results, list):
-                                logger.info(f"Tool {function_name} returned {len(results)} results")
-                                if show_debug and len(results) > 0:
-                                    # Log a sample instead of the full result
-                                    sample_size = min(3, len(results))
-                                    sample = results[:sample_size]
-                                    logger.debug(f"Sample of results: {sample}")
-                            else:
-                                logger.info(f"Tool {function_name} execution completed")
-                            
-                            if show_debug and results:
-                                try:
-                                    results_sample = str(results)[:500] + "..." if len(str(results)) > 500 else str(results)
-                                    logger.debug(f"Tool {function_name} results sample: {results_sample}")
-                                except Exception as e:
-                                    logger.debug(f"Could not log results sample: {str(e)}")
-                            
-                        except Exception as e:
-                            error_trace = traceback.format_exc()
-                            logger.error(f"Error executing tool {function_name}: {str(e)}")
-                            logger.error(f"Traceback: {error_trace}")
-                            results = f"Error executing tool {function_name}: {str(e)}"
-                        
-                        # Add tool results to message history with the correct format
-                        if api_provider == "ollama":
-                            tool_message = {
-                                "role": "tool",
-                                "content": str(results),
-                            }
-                        else:  # OpenAI
-                            tool_message = {
-                                "role": "function",
-                                "name": function_name,
-                                "content": str(results),
-                            }
-                        
-                        st.session_state.messages.append(tool_message)
-                        api_messages.append(tool_message)
-                        
-                        if show_debug:
-                            print(f"Tool {function_name} results: {results}")
-
-                # Display final assistant response if we have one
-                if assistant_response:
-                    with st.chat_message("assistant"):
-                        st.write(assistant_response)
-                    
-                    # If there are no more tool calls or we've reached max iterations, we're done
-                    if not tool_calls or tool_call_count >= max_tool_calls:
-                        # Add a flag to session state to indicate we've processed the final response
-                        st.session_state.conversation_completed = True
-                        
-                        # Add a small delay to ensure UI updates before rerun
-                        time.sleep(0.5)
-                        
-                        # Force Streamlit to rerun the app and display the full conversation
-                        st.rerun()
-                
-                # If we hit the max tool calls limit, inform the user
-                if tool_call_count >= max_tool_calls and tool_calls:
-                    warning_msg = "The assistant reached the maximum number of tool calls allowed. The response may be incomplete."
-                    st.warning(warning_msg)
-                    if show_debug:
-                        print(warning_msg)
+                    log_message("DEBUG", f"Tool {function_name} results: {str(results)[:500]}...")
             
-            except Exception as e:
-                error_trace = traceback.format_exc()
-                logger.error(f"Error during API call #{tool_call_count}: {str(e)}")
-                logger.error(f"Traceback: {error_trace}")
-                raise
-
+            # If we've reached max iterations, inform the user
+            if current_iteration >= max_iterations and tool_calls:
+                warning_msg = "The assistant reached the maximum number of tool calls allowed. The response may be incomplete."
+                st.warning(warning_msg)
+                log_message("WARNING", warning_msg)
+                break
+        
+        # Mark conversation as completed
+        st.session_state.conversation_completed = True
+        
+        # Add a small delay to ensure UI updates before rerun
+        time.sleep(0.5)
+        
+        # Force Streamlit to rerun the app to refresh the display
+        st.rerun()
+                
     except (requests.exceptions.RequestException, openai.OpenAIError) as e:
         error_trace = traceback.format_exc()
-        logger.error(f"API Error: {str(e)}")
-        logger.error(f"Traceback: {error_trace}")
+        log_message("ERROR", f"API Error: {str(e)}")
+        log_message("ERROR", f"Traceback: {error_trace}")
         st.error(f"API Error: {str(e)}")
-        if api_provider == "ollama":
-            st.info("Make sure Ollama is running and accessible.")
-        else:
-            st.info("Check your OpenAI API key and connection.")
+        st.info("Check your OpenAI API key and connection.")
     except Exception as e:
         error_trace = traceback.format_exc()
-        logger.error(f"Unexpected error: {str(e)}")
-        logger.error(f"Traceback: {error_trace}")
+        log_message("ERROR", f"Unexpected error: {str(e)}")
+        log_message("ERROR", f"Traceback: {error_trace}")
         st.error(f"Unexpected error: {str(e)}")

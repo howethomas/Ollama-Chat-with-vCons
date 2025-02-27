@@ -10,7 +10,12 @@ DEFAULT_CONFIG = {
     "openai_api_key": "",
     "ollama_host": "http://localhost:11434",
     "default_model": "llama3.2:latest",
-    "default_openai_model": "gpt-3.5-turbo"
+    "default_openai_model": "gpt-3.5-turbo",
+    "milvus_host": "localhost",
+    "milvus_port": 19530,
+    "milvus_db_name": "default",
+    "milvus_collection_name": "vcons_collection",
+    "milvus_anns_field": "embedding"
 }
 
 def ensure_secrets_file():
